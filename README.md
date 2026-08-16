@@ -458,12 +458,14 @@ authenticate with `ANTHROPIC_API_KEY` in `.env` instead.
 
 `deploy/odoo-claude-bot.service` runs the bot under a dedicated account with
 `ProtectSystem=strict`, an empty capability bounding set, and write access limited
-to its data directory.
+to its systemd state directory.
 
 ```bash
-sudo useradd --system --create-home --shell /usr/sbin/nologin odoo-claude
-sudo install -d -o odoo-claude -g odoo-claude /opt/odoo-claude-bot
-# deploy the repository to /opt/odoo-claude-bot, then:
+sudo useradd --system --home-dir /var/lib/odoo-claude-bot \
+  --shell /usr/sbin/nologin odoo-claude
+sudo install -d -o odoo-claude -g odoo-claude /var/lib/odoo-claude-bot
+sudo install -d -o root -g root /opt/odoo-claude-bot
+# deploy the repository to /opt/odoo-claude-bot and run npm ci && npm run build
 sudo install -o root -g odoo-claude -m 0640 .env /etc/odoo-claude-bot.env
 sudo cp deploy/odoo-claude-bot.service /etc/systemd/system/
 sudo systemctl daemon-reload
@@ -471,8 +473,18 @@ sudo systemctl enable --now odoo-claude-bot
 journalctl -u odoo-claude-bot -f
 ```
 
-Authenticate Claude once as that account before enabling the unit:
+Set `DATABASE_PATH=/var/lib/odoo-claude-bot/bot.sqlite3` in the environment file.
+Under `ProtectSystem=strict` the state directory is the only writable location, so a
+database path inside `/opt` fails at startup.
+
+Authenticate Claude once as that account before enabling the unit, with the same
+`HOME` the unit uses:
 
 ```bash
-sudo -u odoo-claude -H claude setup-token
+sudo -u odoo-claude HOME=/var/lib/odoo-claude-bot claude setup-token
 ```
+
+The unit sets `ProtectHome=true`, which makes `/home` inaccessible. That is why the
+service account's home is `/var/lib/odoo-claude-bot` rather than `/home/odoo-claude`
+— authenticating into `/home` would leave the running service unable to read its own
+Claude credentials.

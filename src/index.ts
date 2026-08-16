@@ -40,18 +40,19 @@ async function main(): Promise<void> {
   const scheduler = new RequestScheduler(config.maxConcurrentRequests, config.maxQueuedRequests);
   const client = createDiscordClient();
 
+  const mcpIdleStatus = config.claudeRequireMcp ? 'unhealthy' : 'disabled';
   const refreshClaudeReadiness = async () => {
     try {
       await claude.checkReadiness();
       readiness.set('claude', 'ready');
-      readiness.set('mcp', 'ready');
+      readiness.set('mcp', config.claudeRequireMcp ? 'ready' : 'disabled');
     } catch (error) {
       if (error instanceof ClaudeError && error.category === 'mcp_unavailable') {
         readiness.set('claude', 'ready');
         readiness.set('mcp', 'unhealthy');
       } else {
         readiness.set('claude', 'unhealthy');
-        readiness.set('mcp', 'unhealthy');
+        readiness.set('mcp', mcpIdleStatus);
       }
       logger.warn(
         { category: error instanceof ClaudeError ? error.category : 'unknown' },

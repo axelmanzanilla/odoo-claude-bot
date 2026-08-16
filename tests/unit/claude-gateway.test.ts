@@ -1,9 +1,12 @@
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { parseConfig } from '../../src/config.js';
 import { ClaudeCliGateway } from '../../src/claude/cli-gateway.js';
 import type { ProcessRunOptions } from '../../src/claude/process-runner.js';
 
-function config() {
+function config(overrides: NodeJS.ProcessEnv = {}) {
   return parseConfig({
     DISCORD_TOKEN: 'placeholder',
     DISCORD_APPLICATION_ID: '123456789012345678',
@@ -12,7 +15,14 @@ function config() {
     ODOO_WORKSPACE: '/tmp/odoo',
     CLAUDE_MODEL: 'test-model',
     CLAUDE_MCP_CONFIG: '/tmp/mcp.json',
+    ...overrides,
   });
+}
+
+async function createWorkspace(): Promise<string> {
+  const workspace = await mkdtemp(join(tmpdir(), 'odoo-workspace-'));
+  await writeFile(join(workspace, 'CLAUDE.md'), '# Odoo workspace\n');
+  return workspace;
 }
 
 describe('ClaudeCliGateway', () => {
@@ -68,6 +78,40 @@ describe('ClaudeCliGateway', () => {
       text: 'fork answer',
       totalCostUsd: 0.2,
       durationMs: 50,
+    });
+  });
+
+  it('skips the MCP probe entirely when the Odoo MCP is not required', async () => {
+    const workspace = await createWorkspace();
+    const calls: string[][] = [];
+    const runner = (input: ProcessRunOptions) => {
+      calls.push([...input.args]);
+      return Promise.resolve({ stdout: '2.0.0', stderr: '' });
+    };
+    const gateway = new ClaudeCliGateway(
+      config({ ODOO_WORKSPACE: workspace, CLAUDE_MCP_CONFIG: '', CLAUDE_REQUIRE_MCP: 'false' }),
+      runner,
+    );
+
+    await expect(gateway.checkReadiness()).resolves.toBeUndefined();
+    expect(calls).toEqual([['--version']]);
+  });
+
+  it('still fails readiness when the Odoo MCP is required but missing', async () => {
+    const workspace = await createWorkspace();
+    const runner = (input: ProcessRunOptions) =>
+      Promise.resolve(
+        input.args[0] === '--version'
+          ? { stdout: '2.0.0', stderr: '' }
+          : { stdout: 'No MCP servers configured.', stderr: '' },
+      );
+    const gateway = new ClaudeCliGateway(
+      config({ ODOO_WORKSPACE: workspace, CLAUDE_MCP_CONFIG: '' }),
+      runner,
+    );
+
+    await expect(gateway.checkReadiness()).rejects.toMatchObject({
+      category: 'mcp_unavailable',
     });
   });
 

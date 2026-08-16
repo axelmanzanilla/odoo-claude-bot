@@ -1,0 +1,53 @@
+[Unit]
+Description=Odoo Claude Discord bridge
+Documentation=https://github.com/axelmanzanilla/odoo-claude-bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+
+# Dedicated unprivileged account. Create it with:
+#   sudo useradd --system --create-home --shell /usr/sbin/nologin odoo-claude
+User=odoo-claude
+Group=odoo-claude
+
+WorkingDirectory=/opt/odoo-claude-bot
+ExecStart=/usr/bin/node dist/index.js
+
+# Secrets live in a root-owned file readable only by the service account:
+#   sudo install -o root -g odoo-claude -m 0640 .env /etc/odoo-claude-bot.env
+EnvironmentFile=/etc/odoo-claude-bot.env
+
+Restart=on-failure
+RestartSec=10s
+
+# index.ts handles SIGTERM and shuts down within SHUTDOWN_GRACE_MS.
+KillSignal=SIGTERM
+TimeoutStopSec=60
+
+# Hardening. The bot only ever writes to its SQLite directory and the Claude
+# home; everything else on disk stays read-only to this unit.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+ReadWritePaths=/opt/odoo-claude-bot/data /var/lib/odoo-claude-bot
+CapabilityBoundingSet=
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=odoo-claude-bot
+
+[Install]
+WantedBy=multi-user.target

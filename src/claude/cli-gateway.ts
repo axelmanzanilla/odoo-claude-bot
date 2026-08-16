@@ -53,6 +53,7 @@ export class ClaudeCliGateway implements ClaudeGateway {
     }
 
     await this.run(['--version'], 10_000);
+    if (!this.config.claudeRequireMcp) return;
     if (this.config.claudeMcpConfig) {
       await this.verifyMcpConfig(this.config.claudeMcpConfig);
       return;

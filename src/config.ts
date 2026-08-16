@@ -3,7 +3,12 @@ import { z } from 'zod';
 
 const DEFAULT_TOOLS = ['Read', 'Glob', 'Grep', 'mcp__Odoo__search', 'mcp__Odoo__read'] as const;
 const SNOWFLAKE = /^\d{17,20}$/;
-const BUILTIN_READ_TOOLS = new Set(['Read', 'Glob', 'Grep']);
+
+// WebFetch and WebSearch read remote documentation without touching the local
+// filesystem. They are permitted but deliberately excluded from DEFAULT_TOOLS:
+// a fetched page is untrusted input and an attacker-chosen URL is an outbound
+// channel, so enabling them is an explicit operator decision.
+const BUILTIN_READ_TOOLS = new Set(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch']);
 const READ_ONLY_MCP_TOOL = /(?:^|_)(?:read|search|get|list|find|query|lookup|fetch)(?:$|_)/i;
 const MUTATING_MCP_TOOL =
   /(?:^|_)(?:add|call|create|delete|execute|mutate|post|remove|send|set|unlink|update|write)(?:$|_)/i;
@@ -41,6 +46,18 @@ const positiveNumber = (fallback: number) =>
       return parsed;
     });
 
+const booleanFlag = (fallback: boolean) =>
+  z
+    .string()
+    .default(String(fallback))
+    .transform((value, context) => {
+      const normalized = value.trim().toLowerCase();
+      if (['true', '1', 'yes', 'on'].includes(normalized)) return true;
+      if (['false', '0', 'no', 'off'].includes(normalized)) return false;
+      context.addIssue({ code: 'custom', message: 'must be a boolean' });
+      return z.NEVER;
+    });
+
 const commaList = z.string().transform((value) =>
   value
     .split(',')
@@ -75,6 +92,7 @@ const environmentSchema = z.object({
     .transform((value) => value.trim() || undefined),
   CLAUDE_MCP_CONFIG: optionalAbsolutePath,
   CLAUDE_MCP_SERVER_NAME: z.string().trim().min(1).default('Odoo'),
+  CLAUDE_REQUIRE_MCP: booleanFlag(true),
   CLAUDE_SETTING_SOURCES: z
     .string()
     .default('user,project,local')
@@ -115,6 +133,7 @@ export interface AppConfig {
   readonly claudeModel?: string;
   readonly claudeMcpConfig?: string;
   readonly claudeMcpServerName: string;
+  readonly claudeRequireMcp: boolean;
   readonly claudeSettingSources: string;
   readonly claudePermissionMode: 'dontAsk';
   readonly claudeAllowedTools: readonly string[];
@@ -154,6 +173,7 @@ export function parseConfig(environment: NodeJS.ProcessEnv): Readonly<AppConfig>
     ...(value.CLAUDE_MODEL === undefined ? {} : { claudeModel: value.CLAUDE_MODEL }),
     ...(value.CLAUDE_MCP_CONFIG === undefined ? {} : { claudeMcpConfig: value.CLAUDE_MCP_CONFIG }),
     claudeMcpServerName: value.CLAUDE_MCP_SERVER_NAME,
+    claudeRequireMcp: value.CLAUDE_REQUIRE_MCP,
     claudeSettingSources: value.CLAUDE_SETTING_SOURCES,
     claudePermissionMode: value.CLAUDE_PERMISSION_MODE,
     claudeAllowedTools: Object.freeze([...value.CLAUDE_ALLOWED_TOOLS]),

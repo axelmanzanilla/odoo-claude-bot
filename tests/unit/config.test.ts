@@ -58,6 +58,31 @@ describe('parseConfig', () => {
     ).toThrow();
   });
 
+  it('requires the Odoo MCP by default and allows an explicit opt out', () => {
+    expect(parseConfig(validEnvironment()).claudeRequireMcp).toBe(true);
+    expect(
+      parseConfig({ ...validEnvironment(), CLAUDE_REQUIRE_MCP: 'false' }).claudeRequireMcp,
+    ).toBe(false);
+    expect(parseConfig({ ...validEnvironment(), CLAUDE_REQUIRE_MCP: '0' }).claudeRequireMcp).toBe(
+      false,
+    );
+    expect(() => parseConfig({ ...validEnvironment(), CLAUDE_REQUIRE_MCP: 'maybe' })).toThrow(
+      ConfigurationError,
+    );
+  });
+
+  it('permits read-only web tools without adding them to the default allowlist', () => {
+    expect(DEFAULT_TOOLS).not.toContain('WebFetch');
+    const config = parseConfig({
+      ...validEnvironment(),
+      CLAUDE_ALLOWED_TOOLS: 'Read,Glob,Grep,WebFetch,WebSearch',
+    });
+    expect(config.claudeAllowedTools).toEqual(['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch']);
+    expect(() =>
+      parseConfig({ ...validEnvironment(), CLAUDE_ALLOWED_TOOLS: 'Read,WebFetch,Write' }),
+    ).toThrow(ConfigurationError);
+  });
+
   it('deduplicates allowlists and resolves the database path', () => {
     const config = parseConfig({
       ...validEnvironment(),

@@ -1,5 +1,5 @@
 export type ComponentName = 'configuration' | 'database' | 'claude' | 'mcp' | 'discord';
-export type ComponentStatus = 'ready' | 'unhealthy' | 'starting' | 'stopped';
+export type ComponentStatus = 'ready' | 'unhealthy' | 'starting' | 'stopped' | 'disabled';
 
 export class ReadinessState {
   private readonly components = new Map<ComponentName, ComponentStatus>([
@@ -15,7 +15,9 @@ export class ReadinessState {
   }
 
   isReady(): boolean {
-    return [...this.components.values()].every((status) => status === 'ready');
+    return [...this.components.values()].every(
+      (status) => status === 'ready' || status === 'disabled',
+    );
   }
 
   summary(): string {

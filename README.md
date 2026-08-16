@@ -95,7 +95,9 @@ or Managed Agents without rewriting the Discord and database layers.
 - Node.js 22.13 or newer.
 - Claude Code installed and authenticated.
 - Access to the Odoo 19.0 workspace.
-- A working, preferably read-only Odoo MCP server.
+- A working, preferably read-only Odoo MCP server. Optional: see
+  [Deployment profiles](#deployment-profiles) for the code-search-only profile,
+  which runs with no MCP server and no Odoo database access at all.
 - A Discord application and bot token.
 
 Verify the local tools:
@@ -122,6 +124,58 @@ claude --version
 
 Slash commands may be added for health and administrative actions, but ordinary
 message replies are the core conversation interface.
+
+## Deployment profiles
+
+Two supported shapes. Both keep Claude read-only; they differ in whether it can
+reach a live Odoo database.
+
+### Full profile (default)
+
+Claude reads the Odoo source tree **and** queries a live database through the Odoo
+MCP server. Best for answering questions about actual records, configuration, and
+customer data. Requires the MCP setup below and `CLAUDE_REQUIRE_MCP=true`.
+
+### Code-search-only profile
+
+Claude reads only the Odoo 19.0 source tree. There is no MCP server, no database
+credentials, and nothing sensitive on the host — the worst outcome of a successful
+prompt injection is an inaccurate answer. This is the right profile for a rented
+server whose job is answering "how does this Odoo feature actually work?" with
+citations from real source instead of recalled approximations.
+
+```dotenv
+CLAUDE_REQUIRE_MCP=false
+CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
+ODOO_WORKSPACE=/workspace/odoo
+```
+
+With `CLAUDE_REQUIRE_MCP=false` the startup probe is skipped entirely and `health`
+reports `mcp: disabled`, which does not block requests. Leaving it `true` without a
+reachable MCP server makes the bot reject every message.
+
+`ODOO_WORKSPACE` still has to exist and still has to contain a `CLAUDE.md`; that
+file is how you give Claude the conventions and orientation it would otherwise
+guess at. A minimal one is enough to start:
+
+```bash
+git clone --depth 1 --branch 19.0 https://github.com/odoo/odoo.git /workspace/odoo
+printf '# Odoo 19.0\n\nRead-only source checkout. Cite file paths in answers.\n' \
+  > /workspace/odoo/CLAUDE.md
+```
+
+To let Claude also consult the official Odoo documentation online, add the web
+tools:
+
+```dotenv
+CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep,WebFetch,WebSearch
+```
+
+Understand the tradeoff before enabling them. A fetched page is untrusted input,
+and a URL Claude chooses is an outbound channel, so web access widens the injection
+surface in a way local file reads do not. It is a reasonable trade when the
+workspace holds only public source, and a poor one once proprietary modules are
+present.
 
 ## Odoo MCP setup
 
@@ -164,6 +218,7 @@ CLAUDE_BIN=claude
 CLAUDE_MODEL=
 CLAUDE_MCP_CONFIG=
 CLAUDE_MCP_SERVER_NAME=Odoo
+CLAUDE_REQUIRE_MCP=true
 CLAUDE_SETTING_SOURCES=user,project,local
 CLAUDE_PERMISSION_MODE=dontAsk
 CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep,mcp__Odoo__search,mcp__Odoo__read
@@ -179,12 +234,15 @@ SHUTDOWN_GRACE_MS=30000
 
 The bot refuses to accept work when required variables are missing. Leaving an
 allowlist empty never enables public access. `CLAUDE_ALLOWED_TOOLS` accepts only the
-built-in `Read`, `Glob`, and `Grep` tools plus MCP tool names that are explicitly
-read-like. Unknown or mutation-shaped tools fail configuration validation.
+built-in `Read`, `Glob`, `Grep`, `WebFetch`, and `WebSearch` tools plus MCP tool
+names that are explicitly read-like. Unknown or mutation-shaped tools fail
+configuration validation. `WebFetch` and `WebSearch` are permitted but not enabled
+by default; see [Deployment profiles](#deployment-profiles).
 
 `CLAUDE_MCP_CONFIG`, when set, must be an absolute path and contain an
 `mcpServers` entry matching `CLAUDE_MCP_SERVER_NAME`. Otherwise startup checks
-`claude mcp list` from the Odoo workspace for that server.
+`claude mcp list` from the Odoo workspace for that server. Setting
+`CLAUDE_REQUIRE_MCP=false` skips both checks and marks the component `disabled`.
 
 ## Expected development commands
 
@@ -282,6 +340,12 @@ claude mcp get Odoo
 
 Claude Desktop configuration alone is not sufficient.
 
+If the bot answers every message with "The Odoo assistant is not ready" and `health`
+reports `mcp: unhealthy`, the MCP server is required but not visible. Either fix the
+MCP configuration or, if this deployment is not meant to reach an Odoo database at
+all, set `CLAUDE_REQUIRE_MCP=false` and drop the `mcp__Odoo__*` entries from
+`CLAUDE_ALLOWED_TOOLS`. See [Deployment profiles](#deployment-profiles).
+
 ### A reply cannot recover its conversation
 
 The referenced bot message must still have a mapping in the configured SQLite
@@ -332,3 +396,46 @@ directory to this repository, use a dedicated operating-system account with acce
 to the Odoo workspace and Claude authentication, restart on failure, and send
 SIGTERM for bounded graceful shutdown. Keep credentials out of service definition
 files that are committed to Git.
+
+Two ready-made options are included.
+
+### Docker Compose
+
+`Dockerfile` and `docker-compose.yml` build the bot, install the Claude Code CLI,
+mount the Odoo source **read-only**, and keep Claude credentials and the SQLite
+database in named volumes so forks still resolve after a restart.
+
+```bash
+cp .env.example .env          # fill in tokens, IDs, and the chosen profile
+export ODOO_SOURCE=/srv/odoo  # host path to the Odoo 19.0 checkout
+docker compose build
+docker compose run --rm bot claude setup-token   # one-time authentication
+docker compose up -d
+docker compose logs -f
+```
+
+The one-time `setup-token` step writes into the `claude-home` volume. Skip it if you
+authenticate with `ANTHROPIC_API_KEY` in `.env` instead.
+
+### systemd
+
+`deploy/odoo-claude-bot.service` runs the bot under a dedicated account with
+`ProtectSystem=strict`, an empty capability bounding set, and write access limited
+to its data directory.
+
+```bash
+sudo useradd --system --create-home --shell /usr/sbin/nologin odoo-claude
+sudo install -d -o odoo-claude -g odoo-claude /opt/odoo-claude-bot
+# deploy the repository to /opt/odoo-claude-bot, then:
+sudo install -o root -g odoo-claude -m 0640 .env /etc/odoo-claude-bot.env
+sudo cp deploy/odoo-claude-bot.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now odoo-claude-bot
+journalctl -u odoo-claude-bot -f
+```
+
+Authenticate Claude once as that account before enabling the unit:
+
+```bash
+sudo -u odoo-claude -H claude setup-token
+```

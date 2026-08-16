@@ -1,0 +1,17 @@
+.env*
+!.env.example
+node_modules/
+dist/
+coverage/
+*.log
+logs/
+data/*.sqlite
+data/*.sqlite3
+data/*.sqlite-*
+data/*.sqlite3-*
+.claude/
+claude-state/
+.DS_Store
+.idea/
+.vscode/
+*.tsbuildinfo

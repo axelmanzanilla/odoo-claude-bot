@@ -25,14 +25,14 @@ RUN npm ci --omit=dev && npm cache clean --force
 COPY --from=build /app/dist ./dist
 
 # The bot writes only to /app/data. Mount the Odoo workspace read-only at
-# /workspace/odoo and set ODOO_WORKSPACE to match.
+# /workspace and set ODOO_WORKSPACE to match.
 RUN mkdir -p /app/data /home/node/.claude \
   && chown -R node:node /app/data /home/node/.claude
 USER node
 VOLUME ["/app/data"]
 
 ENV DATABASE_PATH=/app/data/bot.sqlite3
-ENV ODOO_WORKSPACE=/workspace/odoo
+ENV ODOO_WORKSPACE=/workspace
 
 # Claude needs a writable HOME for its credentials and session transcripts.
 ENV HOME=/home/node

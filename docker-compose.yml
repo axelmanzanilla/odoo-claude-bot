@@ -6,11 +6,12 @@ services:
     environment:
       # Container-local paths override anything set in .env.
       DATABASE_PATH: /app/data/bot.sqlite3
-      ODOO_WORKSPACE: /workspace/odoo
+      ODOO_WORKSPACE: /workspace
     volumes:
-      # The Odoo source is mounted read-only so the operating system enforces
-      # the read-only invariant even if the tool allowlist is ever misconfigured.
-      - ${ODOO_SOURCE:-./odoo}:/workspace/odoo:ro
+      # The workspace (CLAUDE.md + odoo/ + documentation/) is mounted read-only so
+      # the operating system enforces the read-only invariant even if the tool
+      # allowlist is ever misconfigured.
+      - ${ODOO_WORKSPACE_SOURCE:-./workspace}:/workspace:ro
       # Claude CLI credentials and session transcripts. Forks resume from here,
       # so this must survive container restarts.
       - claude-home:/home/node/.claude

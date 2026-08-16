@@ -147,25 +147,55 @@ citations from real source instead of recalled approximations.
 ```dotenv
 CLAUDE_REQUIRE_MCP=false
 CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep
-ODOO_WORKSPACE=/workspace/odoo
+ODOO_WORKSPACE=/workspace
 ```
 
 With `CLAUDE_REQUIRE_MCP=false` the startup probe is skipped entirely and `health`
 reports `mcp: disabled`, which does not block requests. Leaving it `true` without a
 reachable MCP server makes the bot reject every message.
 
-`ODOO_WORKSPACE` still has to exist and still has to contain a `CLAUDE.md`; that
-file is how you give Claude the conventions and orientation it would otherwise
-guess at. A minimal one is enough to start:
+#### Building the workspace
+
+`ODOO_WORKSPACE` is a directory holding the checkouts plus a `CLAUDE.md`. Keep
+`CLAUDE.md` at the root rather than inside a checkout, so it does not show up as an
+untracked file in someone's git status.
 
 ```bash
-git clone --depth 1 --branch 19.0 https://github.com/odoo/odoo.git /workspace/odoo
-printf '# Odoo 19.0\n\nRead-only source checkout. Cite file paths in answers.\n' \
-  > /workspace/odoo/CLAUDE.md
+mkdir -p /srv/odoo-workspace
+cd /srv/odoo-workspace
+
+# Community source: what Claude cites in answers.
+git clone --depth 1 --branch 19.0 https://github.com/odoo/odoo.git odoo
+
+# Official documentation: lets Claude quote the real docs without network access.
+git clone --depth 1 --branch 19.0 https://github.com/odoo/documentation.git documentation
 ```
 
-To let Claude also consult the official Odoo documentation online, add the web
-tools:
+Then copy the workspace instructions template from this repository:
+
+```bash
+cp deploy/workspace-CLAUDE.md.example /srv/odoo-workspace/CLAUDE.md
+```
+
+`deploy/workspace-CLAUDE.md.example` is written for exactly this profile: it tells
+Claude to grep before answering, to cite `path:line` for every claim, to say when
+something is not in the checkout instead of guessing, and to keep answers sized for
+Discord. Edit it to match how you work — it is the single highest-leverage input to
+answer quality.
+
+Two things to keep **out** of this workspace:
+
+- **Odoo Enterprise.** It is licensed, not open source. Cloning it to a rented host
+  and sending it to a third-party API is a licensing question separate from any
+  internal policy. The template tells Claude to say Enterprise source is
+  unavailable rather than reconstructing it from memory.
+- **Company or customer code and conventions.** Customer repositories, manifest
+  metadata, requirements documents, and internal naming schemes are proprietary.
+  The template tells Claude not to invent company-specific values.
+
+Cloning the documentation repository is what makes `WebFetch`/`WebSearch` largely
+unnecessary — Claude greps the real 19.0 docs locally. If you still want live web
+access, add:
 
 ```dotenv
 CLAUDE_ALLOWED_TOOLS=Read,Glob,Grep,WebFetch,WebSearch
@@ -176,6 +206,13 @@ and a URL Claude chooses is an outbound channel, so web access widens the inject
 surface in a way local file reads do not. It is a reasonable trade when the
 workspace holds only public source, and a poor one once proprietary modules are
 present.
+
+Refresh the checkouts periodically so answers track the current 19.0 branch:
+
+```bash
+cd /srv/odoo-workspace/odoo && git pull --ff-only
+cd /srv/odoo-workspace/documentation && git pull --ff-only
+```
 
 ## Odoo MCP setup
 
@@ -406,8 +443,8 @@ mount the Odoo source **read-only**, and keep Claude credentials and the SQLite
 database in named volumes so forks still resolve after a restart.
 
 ```bash
-cp .env.example .env          # fill in tokens, IDs, and the chosen profile
-export ODOO_SOURCE=/srv/odoo  # host path to the Odoo 19.0 checkout
+cp .env.example .env                            # tokens, IDs, chosen profile
+export ODOO_WORKSPACE_SOURCE=/srv/odoo-workspace  # host path to the workspace
 docker compose build
 docker compose run --rm bot claude setup-token   # one-time authentication
 docker compose up -d

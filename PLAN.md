@@ -264,3 +264,19 @@ of documentation-only installations. Installation, typecheck, lint, build, audit
 at the high threshold, fake session smoke test, and built empty-init CLI smoke
 test passed. The same two moderate development-only audit findings remain.
 Runtime instruction behavior still requires the documented live Discord smoke test.
+
+## Optional Enterprise source
+
+- [x] Add explicit per-version Enterprise opt-in over Git HTTPS, installed-only
+      updates, and safe Enterprise-only removal with accurate inventory.
+- [x] Update runtime/development CLAUDE.md instructions and document credentials,
+      commands, migration, partial failures, and live operator checks.
+- [x] Test with local Git remotes and run installation, formatting, typecheck, lint,
+      tests, build, high-threshold audit, and fake smoke verification.
+
+Verification: 97 tests passed, including 16 local-Git workspace tests. Installation,
+formatting, typecheck, lint, build, high-threshold audit, fake create/fork smoke,
+and a built CLI smoke using local remotes passed. Enterprise access failures,
+retry, installed-only updates, removal, dirty files, and symlinks are covered.
+The two existing moderate development-only audit findings remain. No private
+Enterprise download, server deployment, or live Discord/Claude test was performed.

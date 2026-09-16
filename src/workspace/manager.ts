@@ -14,9 +14,11 @@ import { isAbsolute, join, resolve } from 'node:path';
 const repositories = {
   odoo: 'https://github.com/odoo/odoo.git',
   documentation: 'https://github.com/odoo/documentation.git',
+  enterprise: 'https://github.com/odoo/enterprise.git',
 } as const;
 type Repository = keyof typeof repositories;
 const names = Object.keys(repositories) as Repository[];
+const communityNames: Repository[] = ['odoo', 'documentation'];
 const versionPattern = /^(?:\d{2}\.0|saas-\d{2}\.\d+)$/;
 
 export function compareVersions(a: string, b: string): number {
@@ -102,17 +104,22 @@ export class WorkspaceManager {
 
   static async open(
     root: string,
-    remotes: Record<Repository, string> = repositories,
+    remotes: Partial<Record<Repository, string>> = {},
   ): Promise<WorkspaceManager> {
     if (!isAbsolute(root)) throw new Error('--workspace must be an absolute host path.');
     await directory(root);
-    return new WorkspaceManager(await realpath(root), remotes);
+    return new WorkspaceManager(await realpath(root), { ...repositories, ...remotes });
   }
 
   async run(
     command: 'init' | 'add' | 'update' | 'remove' | 'list',
     versions: string[],
+    options: { enterprise?: boolean } = {},
   ): Promise<string> {
+    if (options.enterprise && command !== 'add' && command !== 'remove')
+      throw new Error(
+        '--enterprise is only supported with add or remove. Update refreshes installed repositories.',
+      );
     for (const version of versions) {
       if (!versionPattern.test(version) || version.trim() !== version)
         throw new Error(`Invalid Odoo version: ${version}`);
@@ -135,9 +142,9 @@ export class WorkspaceManager {
       await directory(join(this.root, 'versions'));
       const selected = [...new Set(versions.length ? versions : await this.versions())];
       for (const version of selected) {
-        if (command === 'add') await this.add(version);
+        if (command === 'add') await this.add(version, options.enterprise ?? false);
         if (command === 'update') await this.update(version);
-        if (command === 'remove') await this.remove(version);
+        if (command === 'remove') await this.remove(version, options.enterprise ?? false);
       }
       return await this.inventory();
     } catch (error) {
@@ -225,15 +232,20 @@ export class WorkspaceManager {
     }
   }
 
-  private async add(version: string): Promise<void> {
+  private async add(version: string, enterprise: boolean): Promise<void> {
     await directory(join(this.root, 'versions', version));
-    for (const name of names) {
+    for (const name of enterprise ? names : communityNames) {
       if (await exists(this.checkout(version, name))) {
         await this.assertManaged(version, name);
         continue;
       }
-      await this.prepare(name);
-      await this.fetch(version, name);
+      try {
+        await this.prepare(name);
+        await this.fetch(version, name);
+      } catch (error) {
+        if (name === 'enterprise') throw this.enterpriseError(version);
+        throw error;
+      }
       await git(this.repo(name), [
         'worktree',
         'add',
@@ -245,33 +257,57 @@ export class WorkspaceManager {
   }
 
   private async update(version: string): Promise<void> {
-    for (const name of names) await this.assertManaged(version, name, true);
+    const installed: Repository[] = [];
+    if (!(await exists(join(this.root, 'versions', version))))
+      throw new Error(`No repositories installed for ${version}; use add first.`);
     for (const name of names) {
+      if (await exists(this.checkout(version, name))) {
+        await this.assertManaged(version, name, true);
+        installed.push(name);
+      }
+    }
+    if (!installed.length)
+      throw new Error(`No repositories installed for ${version}; use add first.`);
+    for (const name of installed) {
       // Fetch into FETCH_HEAD first: a failed checkout keeps the previous source ref.
-      await git(this.repo(name), [
-        'fetch',
-        '--quiet',
-        '--depth=1',
-        '--no-tags',
-        'origin',
-        `refs/heads/${version}`,
-      ]);
+      try {
+        await git(this.repo(name), [
+          'fetch',
+          '--quiet',
+          '--depth=1',
+          '--no-tags',
+          'origin',
+          `refs/heads/${version}`,
+        ]);
+      } catch (error) {
+        if (name === 'enterprise') throw this.enterpriseError(version);
+        throw error;
+      }
       const commit = await git(this.repo(name), ['rev-parse', 'FETCH_HEAD']);
       await git(this.checkout(version, name), ['checkout', '--detach', commit]);
       await git(this.repo(name), ['update-ref', this.ref(version), commit]);
     }
   }
 
-  private async remove(version: string): Promise<void> {
+  private enterpriseError(version: string): Error {
+    return new Error(
+      `Enterprise download failed for ${version}. Check connectivity, branch availability, and this operator account's Git HTTPS credentials and access to odoo/enterprise. Existing downloads are retained; retry the command after fixing access.`,
+    );
+  }
+
+  private async remove(version: string, enterpriseOnly: boolean): Promise<void> {
     const parent = join(this.root, 'versions', version);
     if (!(await exists(parent))) return;
     const installed: Repository[] = [];
     if (!(await lstat(parent)).isDirectory())
       throw new Error('Refusing a symlink version directory.');
-    if ((await readdir(parent)).some((name) => !names.includes(name as Repository))) {
+    if (
+      !enterpriseOnly &&
+      (await readdir(parent)).some((name) => !names.includes(name as Repository))
+    ) {
       throw new Error(`Extra files in versions/${version}; preserve them manually first.`);
     }
-    for (const name of names) {
+    for (const name of enterpriseOnly ? (['enterprise'] as const) : names) {
       if (await exists(this.checkout(version, name))) {
         await this.assertManaged(version, name, true);
         installed.push(name);
@@ -281,7 +317,7 @@ export class WorkspaceManager {
       await git(this.repo(name), ['worktree', 'remove', this.checkout(version, name)]);
       await git(this.repo(name), ['update-ref', '-d', this.ref(version)]);
     }
-    await rmdir(parent);
+    if (!enterpriseOnly || (await readdir(parent)).length === 0) await rmdir(parent);
   }
 
   private async inventory(): Promise<string> {
@@ -291,6 +327,7 @@ export class WorkspaceManager {
       'Generated by the host operator. Re-read this file on every request, including resumed sessions.',
       'Use the explicitly requested version, or the newest installed Odoo source when none is specified in the current request.',
       'Missing paths mean unavailable source. Never substitute for an explicitly requested version.',
+      'Enterprise is optional per version: inspect it only when listed and present. Its absence does not change the selected Odoo version.',
       '',
       '| Version | Repository | Commit | Path |',
       '| --- | --- | --- | --- |',

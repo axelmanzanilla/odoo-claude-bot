@@ -27,7 +27,11 @@ beforeEach(async () => {
   await git(remote, ['commit', '-m', 'initial']);
   for (const branch of ['18.0', '19.0', 'saas-19.3', 'saas-19.4'])
     await git(remote, ['branch', branch]);
-  manager = await WorkspaceManager.open(root, { odoo: remote, documentation: remote });
+  manager = await WorkspaceManager.open(root, {
+    odoo: remote,
+    documentation: remote,
+    enterprise: remote,
+  });
 });
 
 afterEach(async () => {
@@ -149,6 +153,140 @@ describe('operator version manager with real local Git remotes', () => {
     expect(partial).not.toContain('versions/saas-19.4/documentation/');
     await git(docs, ['branch', 'saas-19.4', '19.0']);
     expect(await manager.run('add', ['saas-19.4'])).toContain('versions/saas-19.4/documentation/');
+  });
+
+  it('never contacts Enterprise without opt-in, including after it was removed', async () => {
+    manager = await WorkspaceManager.open(root, {
+      odoo: remote,
+      documentation: remote,
+      enterprise: join(temp, 'inaccessible'),
+    });
+    await manager.run('init', []);
+    await manager.run('add', ['19.0']);
+    await manager.run('update', []);
+    expect(await readdir(join(root, '.repositories'))).not.toContain('enterprise.git');
+    await expect(manager.run('add', ['19.0'], { enterprise: true })).rejects.toThrow(
+      'Git HTTPS credentials',
+    );
+    const inventory = await readFile(join(root, 'VERSIONS.md'), 'utf8');
+    expect(inventory).toContain('versions/19.0/odoo/');
+    expect(inventory).not.toContain('versions/19.0/enterprise/');
+    const enterpriseRepo = join(root, '.repositories/enterprise.git');
+    await git(enterpriseRepo, ['remote', 'set-url', 'origin', remote]);
+    await manager.run('add', ['19.0'], { enterprise: true });
+    await git(enterpriseRepo, ['remote', 'set-url', 'origin', join(temp, 'inaccessible')]);
+    await manager.run('remove', ['19.0'], { enterprise: true });
+    await manager.run('update', []);
+    expect(await manager.run('add', ['19.0'])).not.toContain('versions/19.0/enterprise/');
+  });
+
+  it('adds Enterprise later, updates installed repositories, and removes it independently', async () => {
+    await manager.run('add', ['18.0', '19.0']);
+    const original = await git(join(root, 'versions/19.0/odoo'), ['rev-parse', 'HEAD']);
+    const added = await manager.run('add', ['19.0'], { enterprise: true });
+    expect(added).toContain('versions/19.0/enterprise/');
+    expect(added).not.toContain('versions/18.0/enterprise/');
+    expect(await git(join(root, 'versions/19.0/odoo'), ['rev-parse', 'HEAD'])).toBe(original);
+    await manager.run('add', ['19.0'], { enterprise: true });
+    await git(remote, ['checkout', '19.0']);
+    await writeFile(join(remote, 'source.txt'), 'updated enterprise');
+    await git(remote, ['commit', '-am', 'update']);
+    await manager.run('update', []);
+    expect(await readFile(join(root, 'versions/19.0/enterprise/source.txt'), 'utf8')).toBe(
+      'updated enterprise',
+    );
+    expect(await readFile(join(root, 'versions/18.0/odoo/source.txt'), 'utf8')).toBe('original');
+    await manager.run('remove', ['19.0'], { enterprise: true });
+    const inventory = await manager.run('remove', ['19.0'], { enterprise: true });
+    expect(inventory).not.toContain('versions/19.0/enterprise/');
+    expect(inventory).toContain('versions/19.0/odoo/');
+    expect(inventory).toContain('versions/19.0/documentation/');
+    expect(inventory).toContain('Newest installed Odoo source: 19.0.');
+    await manager.run('add', ['19.0'], { enterprise: true });
+    expect(await manager.run('remove', ['19.0'])).not.toContain('| 19.0 |');
+  }, 15_000);
+
+  it('protects dirty Enterprise worktrees and operator commits', async () => {
+    await manager.run('add', ['19.0'], { enterprise: true });
+    const checkout = join(root, 'versions/19.0/enterprise');
+    await writeFile(join(checkout, 'local.txt'), 'keep');
+    await expect(manager.run('update', ['19.0'])).rejects.toThrow('Local changes');
+    await expect(manager.run('remove', ['19.0'])).rejects.toThrow('Local changes');
+    await expect(manager.run('remove', ['19.0'], { enterprise: true })).rejects.toThrow(
+      'Local changes',
+    );
+    expect(await readFile(join(root, 'versions/19.0/odoo/source.txt'), 'utf8')).toBe('original');
+    await git(checkout, ['add', '.']);
+    await git(checkout, [
+      '-c',
+      'user.name=Test',
+      '-c',
+      'user.email=test@example.invalid',
+      'commit',
+      '-m',
+      'local',
+    ]);
+    await expect(manager.run('remove', ['19.0'], { enterprise: true })).rejects.toThrow(
+      'Changed HEAD',
+    );
+  });
+
+  it('preserves unrelated local files on Enterprise-only removal and rejects symlinked Enterprise', async () => {
+    await manager.run('add', ['19.0'], { enterprise: true });
+    await writeFile(join(root, 'versions/19.0/custom.txt'), 'keep');
+    await writeFile(join(root, 'versions/19.0/odoo/local.txt'), 'keep');
+    await manager.run('remove', ['19.0'], { enterprise: true });
+    expect(await readFile(join(root, 'versions/19.0/custom.txt'), 'utf8')).toBe('keep');
+    expect(await readFile(join(root, 'versions/19.0/odoo/local.txt'), 'utf8')).toBe('keep');
+    await symlink(remote, join(root, 'versions/19.0/enterprise'));
+    await expect(manager.run('remove', ['19.0'], { enterprise: true })).rejects.toThrow('symlink');
+    await expect(manager.run('add', ['19.0'], { enterprise: true })).rejects.toThrow('symlink');
+    expect(await readFile(join(remote, 'source.txt'), 'utf8')).toBe('original');
+  });
+
+  it('recovers from a missing Enterprise branch without redownloading Community', async () => {
+    const enterprise = join(temp, 'enterprise');
+    await git(temp, ['clone', '--bare', remote, enterprise]);
+    await git(enterprise, ['branch', '-D', '19.0']);
+    manager = await WorkspaceManager.open(root, {
+      odoo: remote,
+      documentation: remote,
+      enterprise,
+    });
+    await expect(manager.run('add', ['19.0'], { enterprise: true })).rejects.toThrow(
+      'Enterprise download failed',
+    );
+    expect(await readFile(join(root, 'VERSIONS.md'), 'utf8')).toContain('versions/19.0/odoo/');
+    await git(enterprise, ['branch', '19.0', '18.0']);
+    expect(await manager.run('add', ['19.0'], { enterprise: true })).toContain(
+      'versions/19.0/enterprise/',
+    );
+    await git(enterprise, ['branch', '-D', '19.0']);
+    await expect(manager.run('update', ['19.0'])).rejects.toThrow('Enterprise download failed');
+    expect(await readFile(join(root, 'versions/19.0/enterprise/source.txt'), 'utf8')).toBe(
+      'original',
+    );
+    expect(await readFile(join(root, 'VERSIONS.md'), 'utf8')).toContain(
+      'versions/19.0/enterprise/',
+    );
+  });
+
+  it('keeps Enterprise optional for newest-version selection and rejects unsupported flags', async () => {
+    await manager.run('add', ['18.0'], { enterprise: true });
+    expect(await manager.run('add', ['19.0'])).toContain('Newest installed Odoo source: 19.0.');
+    for (const command of ['init', 'list', 'update'] as const)
+      await expect(manager.run(command, [], { enterprise: true })).rejects.toThrow(
+        'only supported with add or remove',
+      );
+    await git(join(root, '.repositories/odoo.git'), [
+      'worktree',
+      'remove',
+      join(root, 'versions/18.0/odoo'),
+    ]);
+    await manager.run('remove', ['19.0']);
+    const inventory = await manager.run('list', []);
+    expect(inventory).toContain('versions/18.0/enterprise/');
+    expect(inventory).toContain('No Odoo source installed.');
   });
 
   it('preserves existing instructions and serializes operator mutations', async () => {

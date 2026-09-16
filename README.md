@@ -42,7 +42,7 @@ flowchart TD
 Claude runs in the fixed `ODOO_WORKSPACE` directory. A multi-version deployment
 uses `/srv/odoo-workspace` on the host (or `/workspace` inside Docker). It can access:
 
-- the installed Odoo Community source versions (and Enterprise only if separately provided);
+- the installed Odoo Community source versions (and optional Enterprise installed with `--enterprise`);
 - the workspace `CLAUDE.md` and its referenced development conventions;
 - customer repositories under `dev/` when permitted;
 - the Odoo MCP server for task descriptions, chatter, and other authorized data;
@@ -138,9 +138,9 @@ customer data. Requires the MCP setup below and `CLAUDE_REQUIRE_MCP=true`.
 
 ### Code-search-only profile
 
-Claude reads only the installed Odoo source versions. There is no MCP server, no database
-credentials, and nothing sensitive on the host — the worst outcome of a successful
-prompt injection is an inaccurate answer. This is the right profile for a rented
+Claude reads only the installed Odoo source versions. There is no MCP server or
+database access. The workspace may contain private Enterprise source if the
+operator explicitly installs it. This is the right profile for a rented
 server whose job is answering "how does this Odoo feature actually work?" with
 citations from real source instead of recalled approximations.
 
@@ -157,9 +157,9 @@ reachable MCP server makes the bot reject every message.
 #### Building and maintaining a multi-version workspace
 
 Use Git worktrees: one shared bare repository for Odoo, one for documentation,
-with separate source directories per branch. The manager fetches shallow branch
-snapshots, so it does not download all historical releases. Each checkout still
-uses disk space for its files; removing a version removes its checkout, while
+and optionally one for Enterprise, with separate source directories per branch.
+The manager fetches shallow branch snapshots, so it does not download all historical
+releases. Each checkout still uses disk space for its files; removing a version removes its checkout, while
 shared objects may remain in the Git store.
 
 Run these **on the server host**, from the bot repository, as the account owning
@@ -199,7 +199,7 @@ usable by Git inside the container. Claude reads the mounted source files direct
 The manager requires an explicit absolute **host** path and does not read bot
 credentials or `.env`. Do not run it inside the read-only bot container.
 
-Maintenance commands (a future branch must exist in both official repositories):
+Maintenance commands (a branch must exist in each repository being downloaded):
 
 ```bash
 npm run versions -- add saas-19.4 --workspace /srv/odoo-workspace
@@ -210,8 +210,10 @@ npm run versions -- remove 18.0 --workspace /srv/odoo-workspace
 
 `add` and `remove` are repeatable; `add` preserves an existing checkout, while
 `update` explicitly refreshes it. Update/remove refuse modified or unmanaged
-worktrees and operator commits; removal also refuses extra files in the version
-directory. There is no force-delete option.
+worktrees and operator commits; full-version removal also refuses extra files in
+the version directory. `update` refreshes only installed repositories, including
+Enterprise where present; it never installs a missing repository.
+There is no force-delete option.
 The generated `VERSIONS.md` reports actual installed repositories and commits,
 including partial completion after a network failure. Fix connectivity or a missing
 branch and repeat `add`; do not use `update` to finish an incomplete installation.
@@ -264,15 +266,88 @@ workspace path is `/srv/odoo-workspace`; this is a directory, not a default Odoo
 version. Existing installations relying on the former implicit path must set
 `ODOO_WORKSPACE` explicitly before upgrading.
 
-Two things to keep **out** of this workspace:
+#### Optional Enterprise over HTTPS
 
-- **Odoo Enterprise.** It is licensed, not open source. Cloning it to a rented host
-  and sending it to a third-party API is a licensing question separate from any
-  internal policy. The template tells Claude to say Enterprise source is
-  unavailable rather than reconstructing it from memory.
-- **Company or customer code and conventions.** Customer repositories, manifest
-  metadata, requirements documents, and internal naming schemes are proprietary.
-  The template tells Claude not to invent company-specific values.
+Ordinary `add` downloads only `https://github.com/odoo/odoo.git` and
+`https://github.com/odoo/documentation.git`. `--enterprise` additionally downloads
+`https://github.com/odoo/enterprise.git` for the requested versions. It requires
+an account with access to that private repository. `design-themes` is not managed.
+
+Configure Git HTTPS authentication on the host as the account that runs the
+version commands, not inside the bot container. If Git already has working
+credentials, no additional setup is needed. With GitHub CLI (`gh`) installed:
+
+```bash
+gh auth login --hostname github.com --git-protocol https --web
+gh auth setup-git --hostname github.com
+git ls-remote --exit-code https://github.com/odoo/enterprise.git refs/heads/19.0
+```
+
+Follow the login URL/device code from your own computer if the server has no
+browser. Git reuses GitHub CLI as its credential helper. See
+[GitHub authentication](https://cli.github.com/manual/gh_auth_login) and
+[Git credential setup](https://cli.github.com/manual/gh_auth_setup-git).
+GitHub CLI uses the system credential store when available and otherwise falls
+back to a file in its configuration directory. Keep credentials outside the
+source workspace; do not embed tokens in URLs, bot configuration, or commands.
+The manager disables interactive Git credential prompts, so authenticate first.
+
+After deploying the updated bot and running `npm ci` and `npm run build`, stop
+the bot during maintenance. For systemd:
+
+```bash
+cd /opt/odoo-claude-bot
+sudo systemctl stop odoo-claude-bot
+npm run versions -- add 19.0 --enterprise --workspace /srv/odoo-workspace
+npm run versions -- list --workspace /srv/odoo-workspace
+sudo systemctl start odoo-claude-bot
+```
+
+This creates `versions/19.0/enterprise/` alongside `odoo/` and `documentation/`.
+The same `add --enterprise` command can add Enterprise to an existing Community
+version, preserving its existing snapshots. Failed access or a missing branch
+produces an error, retains successful downloads, and records actual availability
+in `VERSIONS.md`. Fix access and repeat the command. To finish a partial install,
+repeat `add --enterprise`; `update` only refreshes existing checkouts.
+
+For later maintenance, also stop the bot before these operations:
+
+```bash
+# Update all installed repositories of this version, including Enterprise.
+npm run versions -- update 19.0 --workspace /srv/odoo-workspace
+# Remove only Enterprise; preserve Community and documentation.
+npm run versions -- remove 19.0 --enterprise --workspace /srv/odoo-workspace
+# Remove the whole version, including Enterprise if installed.
+npm run versions -- remove 19.0 --workspace /srv/odoo-workspace
+```
+
+`--enterprise` is accepted only by `add` and `remove`. Removing Enterprise is
+repeatable and does not affect other versions. Shared objects may remain in
+`.repositories/enterprise.git`; removing a checkout is not a purge of cached
+source. Later `add` or `update` without opt-in does not reinstall removed Enterprise.
+
+For an existing workspace, the manager preserves `CLAUDE.md`. Back it up and merge
+the updated template, removing the old "No Odoo Enterprise" rule. If it has no
+custom instructions, replace it from the bot repository:
+
+```bash
+cp -n /srv/odoo-workspace/CLAUDE.md /srv/odoo-workspace/CLAUDE.md.before-enterprise
+cp deploy/workspace-CLAUDE.md.example /srv/odoo-workspace/CLAUDE.md
+```
+
+Do this before restarting the bot. Claude then checks Enterprise availability per
+version, reads relevant extensions alongside Community, and cites the repository
+and version used. The newest installed Community base still selects the version
+when none is requested; missing Enterprise never causes a switch to an older
+version. Enterprise addons alone are not a complete source version.
+
+Live verification remains an operator step: ask about an installed Enterprise
+module, check citations under `versions/<version>/enterprise/`, and repeat after
+removing Enterprise. Confirm that the bot reports missing source only when relevant
+and still selects the newest installed version.
+
+Customer repositories and company conventions are outside this template's scope.
+It must not invent company-specific manifest values or requirements.
 
 Cloning the documentation repository is what makes `WebFetch`/`WebSearch` largely
 unnecessary — Claude greps each version’s matching docs locally. If you still want live web

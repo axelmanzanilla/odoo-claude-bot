@@ -5,12 +5,16 @@ import { installInstructions, WorkspaceManager } from './manager.js';
 try {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
-    options: { workspace: { type: 'string' }, help: { type: 'boolean' } },
+    options: {
+      workspace: { type: 'string' },
+      help: { type: 'boolean' },
+      enterprise: { type: 'boolean' },
+    },
   });
   const [command, ...versions] = positionals;
   if (values.help) {
     console.log(
-      'npm run versions -- <init|add|list|update|remove> [versions...] --workspace /absolute/host/path',
+      'npm run versions -- <init|add|list|update|remove> [versions...] --workspace /absolute/host/path\n--enterprise: with add, include Enterprise; with remove, remove only Enterprise.\nupdate refreshes all installed repositories; no downloads happen during init.',
     );
   } else {
     if (!values.workspace || !['init', 'add', 'list', 'update', 'remove'].includes(command ?? '')) {
@@ -20,7 +24,9 @@ try {
     }
     const manager = await WorkspaceManager.open(values.workspace);
     console.log(
-      await manager.run(command as 'init' | 'add' | 'list' | 'update' | 'remove', versions),
+      await manager.run(command as 'init' | 'add' | 'list' | 'update' | 'remove', versions, {
+        enterprise: values.enterprise ?? false,
+      }),
     );
     await installInstructions(
       manager.root,

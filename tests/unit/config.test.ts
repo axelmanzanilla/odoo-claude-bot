@@ -15,7 +15,7 @@ describe('parseConfig', () => {
     expect(config.claudePermissionMode).toBe('dontAsk');
     expect(config.claudeAllowedTools).toEqual(DEFAULT_TOOLS);
     expect(config.maxConcurrentRequests).toBe(1);
-    expect(config.odooWorkspace).toBe('/Users/axelmanzanilla/odoo/versions/19.0');
+    expect(config.odooWorkspace).toBe('/srv/odoo-workspace');
     expect(Object.isFrozen(config)).toBe(true);
   });
 

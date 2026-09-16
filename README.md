@@ -1,6 +1,6 @@
 # Odoo Claude Bot
 
-A private Discord bridge to a Claude Code agent grounded in a local Odoo 19.0
+A private Discord bridge to a Claude Code agent grounded in a local multi-version Odoo
 workspace. It is designed for tasks such as evidence-based estimates, source-aware
 technical reviews, and implementation research using the real Odoo source and an
 Odoo MCP integration.
@@ -39,10 +39,10 @@ flowchart TD
 
 ## Why this is more useful than a generic chat
 
-Claude runs with `/Users/axelmanzanilla/odoo/versions/19.0` as its working
-directory. That gives it access to:
+Claude runs in the fixed `ODOO_WORKSPACE` directory. A multi-version deployment
+uses `/srv/odoo-workspace` on the host (or `/workspace` inside Docker). It can access:
 
-- the exact Odoo 19.0 Community and Enterprise source trees;
+- the installed Odoo Community source versions (and Enterprise only if separately provided);
 - the workspace `CLAUDE.md` and its referenced development conventions;
 - customer repositories under `dev/` when permitted;
 - the Odoo MCP server for task descriptions, chatter, and other authorized data;
@@ -77,7 +77,7 @@ flowchart LR
     A --> Q["Idempotent request queue"]
     Q --> G["Claude gateway"]
     G --> CC["Local Claude Code CLI"]
-    CC --> W["Odoo 19.0 workspace"]
+    CC --> W["Odoo source workspace"]
     CC --> M["Odoo MCP"]
     Q <--> DB["SQLite mappings"]
     G --> O["Chunked Discord response"]
@@ -94,7 +94,7 @@ or Managed Agents without rewriting the Discord and database layers.
 - macOS or Linux.
 - Node.js 22.13 or newer.
 - Claude Code installed and authenticated.
-- Access to the Odoo 19.0 workspace.
+- Access to the Odoo source workspace.
 - A working, preferably read-only Odoo MCP server. Optional: see
   [Deployment profiles](#deployment-profiles) for the code-search-only profile,
   which runs with no MCP server and no Odoo database access at all.
@@ -138,7 +138,7 @@ customer data. Requires the MCP setup below and `CLAUDE_REQUIRE_MCP=true`.
 
 ### Code-search-only profile
 
-Claude reads only the Odoo 19.0 source tree. There is no MCP server, no database
+Claude reads only the installed Odoo source versions. There is no MCP server, no database
 credentials, and nothing sensitive on the host — the worst outcome of a successful
 prompt injection is an inaccurate answer. This is the right profile for a rented
 server whose job is answering "how does this Odoo feature actually work?" with
@@ -154,34 +154,115 @@ With `CLAUDE_REQUIRE_MCP=false` the startup probe is skipped entirely and `healt
 reports `mcp: disabled`, which does not block requests. Leaving it `true` without a
 reachable MCP server makes the bot reject every message.
 
-#### Building the workspace
+#### Building and maintaining a multi-version workspace
 
-`ODOO_WORKSPACE` is a directory holding the checkouts plus a `CLAUDE.md`. Keep
-`CLAUDE.md` at the root rather than inside a checkout, so it does not show up as an
-untracked file in someone's git status.
+Use Git worktrees: one shared bare repository for Odoo, one for documentation,
+with separate source directories per branch. The manager fetches shallow branch
+snapshots, so it does not download all historical releases. Each checkout still
+uses disk space for its files; removing a version removes its checkout, while
+shared objects may remain in the Git store.
 
-```bash
-mkdir -p /srv/odoo-workspace
-cd /srv/odoo-workspace
-
-# Community source: what Claude cites in answers.
-git clone --depth 1 --branch 19.0 https://github.com/odoo/odoo.git odoo
-
-# Official documentation: lets Claude quote the real docs without network access.
-git clone --depth 1 --branch 19.0 https://github.com/odoo/documentation.git documentation
-```
-
-Then copy the workspace instructions template from this repository:
+Run these **on the server host**, from the bot repository, as the account owning
+the source directory. Node.js and Git are required. Build after deploying updates:
 
 ```bash
-cp deploy/workspace-CLAUDE.md.example /srv/odoo-workspace/CLAUDE.md
+cd /opt/odoo-claude-bot
+npm ci
+npm run build
+# If needed, create /srv/odoo-workspace and grant your operator account ownership.
+npm run versions -- init --workspace /srv/odoo-workspace
+npm run versions -- list --workspace /srv/odoo-workspace
 ```
 
-`deploy/workspace-CLAUDE.md.example` is written for exactly this profile: it tells
-Claude to grep before answering, to cite `path:line` for every claim, to say when
-something is not in the checkout instead of guessing, and to keep answers sized for
-Discord. Edit it to match how you work — it is the single highest-leverage input to
-answer quality.
+This initializes an empty workspace with `CLAUDE.md`, `VERSIONS.md`, and empty
+`versions/` and `.repositories/` directories. Installing/building the bot or running
+`init` downloads no Odoo code. An empty workspace is valid: Claude reports that it
+cannot inspect Odoo source until you explicitly add a version. Other readiness
+requirements (Claude authentication, Discord, and MCP when enabled) still apply.
+
+Download only the versions you want, for example:
+
+```bash
+npm run versions -- add 16.0 --workspace /srv/odoo-workspace
+# Optional additional versions; none are preinstalled or preferred:
+npm run versions -- add 18.0 19.0 saas-19.3 saas-19.4 --workspace /srv/odoo-workspace
+```
+
+Each version creates `versions/<version>/odoo/` and
+`versions/<version>/documentation/`, sharing Git storage in `.repositories/`.
+
+Set `ODOO_WORKSPACE=/srv/odoo-workspace` for systemd/native runs. For Docker,
+set `ODOO_WORKSPACE_SOURCE=/srv/odoo-workspace` in Compose's `.env`; Compose
+mounts it read-only at `/workspace` and sets `ODOO_WORKSPACE` automatically.
+Manage Git on the host: worktree metadata points to host paths and need not be
+usable by Git inside the container. Claude reads the mounted source files directly.
+The manager requires an explicit absolute **host** path and does not read bot
+credentials or `.env`. Do not run it inside the read-only bot container.
+
+Maintenance commands (a future branch must exist in both official repositories):
+
+```bash
+npm run versions -- add saas-19.4 --workspace /srv/odoo-workspace
+npm run versions -- update 19.0 --workspace /srv/odoo-workspace
+npm run versions -- update --workspace /srv/odoo-workspace
+npm run versions -- remove 18.0 --workspace /srv/odoo-workspace
+```
+
+`add` and `remove` are repeatable; `add` preserves an existing checkout, while
+`update` explicitly refreshes it. Update/remove refuse modified or unmanaged
+worktrees and operator commits; removal also refuses extra files in the version
+directory. There is no force-delete option.
+The generated `VERSIONS.md` reports actual installed repositories and commits,
+including partial completion after a network failure. Fix connectivity or a missing
+branch and repeat `add`; do not use `update` to finish an incomplete installation.
+Commands are serialized by `.odoo-versions.lock`. After an interrupted process,
+remove that empty lock directory only after verifying no manager is running.
+If an interruption left `.VERSIONS.md.tmp`, remove that generated temporary file
+before retrying. Run maintenance with the bot stopped to prevent requests from
+reading mixed snapshots while worktrees are updated or removed.
+
+A new workspace receives `deploy/workspace-CLAUDE.md.example` automatically.
+Existing `CLAUDE.md` instructions are preserved. The template tells Claude to read
+`VERSIONS.md` on every turn and use the explicitly requested version, or the newest
+installed Odoo source if the current request does not specify one (including
+follow-ups). Version ordering is numeric: `20.0 > saas-19.4 > 19.0 > 18.0 > 16.0`.
+If only 16.0 is installed, it answers directly for 16.0. There is no fixed preferred
+release and no fallback disclaimer. A release available online but not downloaded
+is never selected. Removing the newest installed version selects the next newest;
+removing all versions makes source inspection unavailable. Documentation without
+Odoo code is not a selectable source version. Answers include versioned citations. No bot tool
+permissions are added: these are host administrator commands, not Discord commands.
+
+#### Migrating an existing 19.0 deployment
+
+1. Stop the bot and run the installation commands above using your existing
+   workspace root, then explicitly `add` the versions you want. Existing `odoo/`
+   and `documentation/` directories are preserved.
+2. Back up your workspace `CLAUDE.md`. Merge the **Version selection and workspace
+   layout** section from `deploy/workspace-CLAUDE.md.example` and remove conflicting
+   instructions that restrict Claude to 19.0. For an uncustomized code-search-only
+   workspace, replace it with the template after backing it up:
+
+   ```bash
+   cp -n /srv/odoo-workspace/CLAUDE.md /srv/odoo-workspace/CLAUDE.md.before-multiversion
+   cp deploy/workspace-CLAUDE.md.example /srv/odoo-workspace/CLAUDE.md
+   ```
+
+3. Ensure the service points to the workspace root, not `versions/19.0`. If the
+   root changes, reconfigure project-scoped MCP settings there and retain Claude's
+   credentials/session volume. Prior sessions may need the old workspace location;
+   verify an old reply before removing it.
+4. Restart the bot. Ask it to compare `sale.order` in 18.0 and saas-19.4 and verify
+   citations from both directories. Test a reply to an earlier answer too. These
+   live Discord checks must be run by the operator.
+5. Old standalone checkouts are not managed or deleted by this command. After
+   checking for custom code, remove/archive them manually if no longer needed.
+
+The legacy single-version layout remains supported when its instructions and
+`ODOO_WORKSPACE` are explicitly retained. For new installations, the default
+workspace path is `/srv/odoo-workspace`; this is a directory, not a default Odoo
+version. Existing installations relying on the former implicit path must set
+`ODOO_WORKSPACE` explicitly before upgrading.
 
 Two things to keep **out** of this workspace:
 
@@ -194,7 +275,7 @@ Two things to keep **out** of this workspace:
   The template tells Claude not to invent company-specific values.
 
 Cloning the documentation repository is what makes `WebFetch`/`WebSearch` largely
-unnecessary — Claude greps the real 19.0 docs locally. If you still want live web
+unnecessary — Claude greps each version’s matching docs locally. If you still want live web
 access, add:
 
 ```dotenv
@@ -207,20 +288,13 @@ surface in a way local file reads do not. It is a reasonable trade when the
 workspace holds only public source, and a poor one once proprietary modules are
 present.
 
-Refresh the checkouts periodically so answers track the current 19.0 branch:
-
-```bash
-cd /srv/odoo-workspace/odoo && git pull --ff-only
-cd /srv/odoo-workspace/documentation && git pull --ff-only
-```
-
 ## Odoo MCP setup
 
 Claude Desktop and Claude Code do not share MCP configuration automatically. Check
 Claude Code from the Odoo workspace:
 
 ```bash
-cd /Users/axelmanzanilla/odoo/versions/19.0
+cd /srv/odoo-workspace
 claude mcp list
 ```
 
@@ -250,7 +324,7 @@ DISCORD_ALLOWED_USER_IDS=123456789012345678
 DISCORD_ALLOWED_GUILD_IDS=234567890123456789
 DISCORD_ALLOWED_CHANNEL_IDS=345678901234567890
 
-ODOO_WORKSPACE=/Users/axelmanzanilla/odoo/versions/19.0
+ODOO_WORKSPACE=/srv/odoo-workspace
 CLAUDE_BIN=claude
 CLAUDE_MODEL=
 CLAUDE_MCP_CONFIG=

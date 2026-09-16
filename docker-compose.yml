@@ -8,7 +8,7 @@ services:
       DATABASE_PATH: /app/data/bot.sqlite3
       ODOO_WORKSPACE: /workspace
     volumes:
-      # The workspace (CLAUDE.md + odoo/ + documentation/) is mounted read-only so
+      # The workspace (CLAUDE.md + VERSIONS.md + versions/) is mounted read-only so
       # the operating system enforces the read-only invariant even if the tool
       # allowlist is ever misconfigured.
       - ${ODOO_WORKSPACE_SOURCE:-./workspace}:/workspace:ro

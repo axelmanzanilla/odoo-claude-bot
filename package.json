@@ -16,7 +16,8 @@
     "format:check": "prettier --check .",
     "smoke:fake": "node scripts/fake-e2e.mjs",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "versions": "node dist/workspace/cli.js"
   },
   "dependencies": {
     "discord.js": "14.27.0",

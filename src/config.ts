@@ -84,7 +84,7 @@ const environmentSchema = z.object({
   DISCORD_ALLOWED_USER_IDS: snowflakeList.refine((items) => items.length > 0, 'must not be empty'),
   DISCORD_ALLOWED_GUILD_IDS: snowflakeList.refine((items) => items.length > 0, 'must not be empty'),
   DISCORD_ALLOWED_CHANNEL_IDS: z.string().default('').pipe(snowflakeList),
-  ODOO_WORKSPACE: absolutePath.default('/Users/axelmanzanilla/odoo/versions/19.0'),
+  ODOO_WORKSPACE: absolutePath.default('/srv/odoo-workspace'),
   CLAUDE_BIN: z.string().trim().min(1).default('claude'),
   CLAUDE_MODEL: z
     .string()

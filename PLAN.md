@@ -221,3 +221,36 @@ README explicitly separates them from the pending live operator smoke test.
 
 These features require a separate threat-model and explicit user authorization. Do
 not add them opportunistically while executing this plan.
+
+## Multi-version source workspace
+
+- [x] Add an operator CLI using shared Git repositories and per-version worktrees
+      for add, list, update, and remove, with safe handling of existing files.
+- [x] Replace the single-version workspace instructions with version-aware source
+      selection and document setup, migration, Docker mounts, and maintenance.
+- [x] Test the CLI against local Git remotes, including missing branches, dirty
+      worktrees, independent versions, and repeated operations.
+- [x] Run the required installation, typecheck, lint, tests, build, audit, and fake smoke test.
+
+Verification: 88 tests passed, including seven real-Git integration tests against
+local remotes. Installation, formatting, typecheck, lint, build, high-severity
+audit, fake create/fork smoke test, and the built workspace CLI smoke test passed.
+Two existing moderate development-only Vitest audit findings remain. Confirmed
+18.0, 19.0, saas-19.3, and saas-19.4 branches exist in the official Odoo and
+documentation remotes. No server deployment or live Discord/Claude validation
+was performed; migration and live smoke-test steps are in README.md.
+
+## Empty installation and newest installed source selection
+
+- [x] Add explicit empty workspace initialization without any downloads.
+- [x] Remove fixed-version preferences, publish the newest installed source using
+      numeric ordering, and update runtime/development instructions and setup docs.
+- [x] Test empty, single-version, mixed stable/SaaS, removal, and documentation-only
+      inventories, then run all required verification.
+
+Verification: all 91 tests pass, including empty initialization, numeric release
+ordering, selecting 16.0 alone, stable 20.0 above SaaS 19.4, removal, and exclusion
+of documentation-only installations. Installation, typecheck, lint, build, audit
+at the high threshold, fake session smoke test, and built empty-init CLI smoke
+test passed. The same two moderate development-only audit findings remain.
+Runtime instruction behavior still requires the documented live Discord smoke test.

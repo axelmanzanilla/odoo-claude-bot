@@ -394,6 +394,11 @@ restarts.
 If one Claude answer requires several Discord messages, every chunk maps to the same
 session. Replying to any chunk therefore follows the expected context.
 
+Replies to other users are ignored unless they mention the bot or occur in a
+bot-owned thread, including replies containing only an image. Forwarding a message
+does not count as replying to the bot and does not resume the forwarded session.
+Requests directed at the bot must include text; attachments alone are not supported.
+
 The database stores identifiers and operational metadata by default, not full
 conversation content. Discord and Claude remain the transcript surfaces.
 
@@ -492,6 +497,9 @@ After filling `.env` with real values:
    or Claude activity.
 7. Exercise `status`, a deliberately narrow-timeout configuration, and `cancel`.
 8. Inspect logs for tokens, prompts, answers, MCP payloads, paths, or stack traces.
+9. Outside a bot-owned thread, reply to another user with only an image and forward
+   a bot answer without mentioning the bot. Confirm both are silently ignored;
+   then reply directly to a bot answer with text and confirm it still branches.
 
 The automated suite uses fake Discord envelopes, temporary SQLite databases, and a
 fake Claude executable. It verifies authorization, persistence across restart,

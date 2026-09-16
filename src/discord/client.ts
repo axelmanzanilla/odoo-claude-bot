@@ -1,4 +1,12 @@
-import { Client, Events, GatewayIntentBits, type Message, type PartialMessage } from 'discord.js';
+import {
+  Client,
+  Events,
+  GatewayIntentBits,
+  MessageReferenceType,
+  MessageType,
+  type Message,
+  type PartialMessage,
+} from 'discord.js';
 import type { Logger } from 'pino';
 import type { DiscordMessageEnvelope } from './handler.js';
 
@@ -43,7 +51,12 @@ function toEnvelope(message: Message, botUserId: string): DiscordMessageEnvelope
     parentChannelId: isThread ? (message.channel.parentId ?? undefined) : undefined,
     channelOwnerId: isThread ? (message.channel.ownerId ?? undefined) : undefined,
     mentionsBot: message.mentions.users.has(botUserId),
-    referencedMessageId: message.reference?.messageId,
+    // Forwards and crossposts also carry references, but cannot branch a session.
+    referencedMessageId:
+      message.type === MessageType.Reply &&
+      (message.reference?.type ?? MessageReferenceType.Default) === MessageReferenceType.Default
+        ? message.reference?.messageId
+        : undefined,
     webhookId: message.webhookId ?? undefined,
     async fetchReferenced() {
       try {

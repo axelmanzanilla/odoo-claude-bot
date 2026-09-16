@@ -208,6 +208,16 @@ README explicitly separates them from the pending live operator smoke test.
       ungrounded Odoo estimate.
 - [x] Logs and Git-tracked files contain no secrets or conversation bodies.
 
+## Reply and forward eligibility fix (2026-09-15)
+
+- [x] Confirm a reply targets this bot before reporting an empty prompt.
+- [x] Distinguish actual replies from forwards and other message references.
+- [x] Cover unrelated image-only replies, missing references, valid bot replies,
+      and forwards with regression tests.
+- [x] Run formatting, typecheck, lint, tests, build, and fake smoke test.
+      All 91 tests passed in the combined workspace with mocked Discord/Claude.
+      Live Discord verification is pending.
+
 ## Out of scope for v1
 
 - Editing Odoo source or customer repositories from Discord.

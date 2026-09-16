@@ -125,6 +125,55 @@ afterEach(() => {
 });
 
 describe('DiscordMessageHandler', () => {
+  it.each([
+    ['another user', { id: '500000000000000001', authorId: USER_ID }],
+    ['another bot', { id: '500000000000000001', authorId: '700000000000000001' }],
+    ['a missing message', undefined],
+    ['a mismatched bot message', { id: '500000000000000002', authorId: BOT_ID }],
+  ] as const)('silently ignores an image-only reply to %s', async (_label, reference) => {
+    const { database, repository, gateway, handler } = fixture();
+    const reserve = vi.spyOn(repository, 'reserve');
+    const resolve = vi.spyOn(repository, 'resolveBotMessage');
+    const message = new FakeMessage(
+      '400000000000000001',
+      '',
+      '500000000000000001',
+      reference,
+      false,
+    );
+    await handler.handle(message);
+    expect(message.fetchCount).toBe(1);
+    expect(message.replies).toEqual([]);
+    expect(message.reactions).toEqual([]);
+    expect(reserve).not.toHaveBeenCalled();
+    expect(resolve).not.toHaveBeenCalled();
+    expect(gateway.creates).toEqual([]);
+    expect(gateway.forks).toEqual([]);
+    database.close();
+  });
+
+  it.each(['mention', 'reply', 'thread'] as const)(
+    'still requests text for an empty prompt directed at the bot via %s',
+    async (kind) => {
+      const { database, gateway, handler } = fixture();
+      const message = new FakeMessage(
+        '400000000000000001',
+        kind === 'mention' ? `<@${APP_ID}>` : '',
+        kind === 'reply' ? '500000000000000001' : undefined,
+        kind === 'reply' ? { id: '500000000000000001', authorId: BOT_ID } : undefined,
+        kind === 'mention',
+      );
+      if (kind === 'thread') Object.defineProperty(message, 'channelOwnerId', { value: BOT_ID });
+      await handler.handle(message);
+      expect(message.replies.map(({ content }) => content)).toEqual([
+        'Please include a text request.',
+      ]);
+      expect(gateway.creates).toEqual([]);
+      expect(gateway.forks).toEqual([]);
+      database.close();
+    },
+  );
+
   it('creates a new session and maps every output message', async () => {
     const { database, repository, gateway, handler } = fixture();
     const message = new FakeMessage('400000000000000001', `<@${APP_ID}> estimate this`);

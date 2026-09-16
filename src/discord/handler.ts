@@ -87,12 +87,6 @@ export class DiscordMessageHandler {
       return;
     }
 
-    let prompt = normalizePrompt(message.content, this.config.discordApplicationId);
-    if (!prompt) {
-      await this.safeReply(message, 'Please include a request after mentioning me.');
-      return;
-    }
-
     let fetchedReference: ReferencedMessage | undefined;
     if (
       message.referencedMessageId &&
@@ -100,7 +94,19 @@ export class DiscordMessageHandler {
       message.channelOwnerId !== this.botUserId
     ) {
       fetchedReference = await message.fetchReferenced();
-      if (!fetchedReference || fetchedReference.authorId !== this.botUserId) return;
+      if (
+        !fetchedReference ||
+        fetchedReference.id !== message.referencedMessageId ||
+        fetchedReference.authorId !== this.botUserId
+      )
+        return;
+    }
+
+    // Validate reply eligibility before sending even an empty-prompt error.
+    let prompt = normalizePrompt(message.content, this.config.discordApplicationId);
+    if (!prompt) {
+      await this.safeReply(message, 'Please include a text request.');
+      return;
     }
 
     const command = prompt.match(/^(health|status|cancel|new)(?:\s+([\s\S]*))?$/i);
